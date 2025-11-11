@@ -13,7 +13,7 @@ import GiftPopup from './components/GiftPopup';
 import RelationshipBar from './components/RelationshipBar';
 import GiftSelectionModal from './components/GiftSelectionModal';
 import { initialMessages, createInitialCharacterState, defaultTheme } from './constants';
-import { parseGeminiResponse, generateGeminiPrompt, generatePhoneUpdatePrompt, parsePhoneUpdateResponse, generateSuggestionPrompt, parseSuggestionResponse } from './services/geminiService';
+import { parseGeminiResponse, generateGeminiPrompt, generatePhoneUpdatePrompt, parsePhoneUpdateResponse, generateSuggestionPrompt, parseSuggestionResponse, generateBackgroundUpdatePrompt } from './services/geminiService';
 import { decode, decodeAudioData } from './utils/audioUtils';
 
 const App: React.FC = () => {
@@ -79,6 +79,19 @@ const App: React.FC = () => {
     const ai = aiRef.current;
 
     const audioContextRef = useRef<AudioContext | null>(null);
+
+    // Refs to hold the latest state for the background update interval
+    const messagesForUpdate = useRef(messages);
+    const characterStateForUpdate = useRef(characterState);
+
+    useEffect(() => {
+        messagesForUpdate.current = messages;
+    }, [messages]);
+    
+    useEffect(() => {
+        characterStateForUpdate.current = characterState;
+    }, [characterState]);
+
 
     const playAudio = useCallback(async (base64Audio: string) => {
         if (!audioContextRef.current) {
@@ -389,7 +402,7 @@ const App: React.FC = () => {
         }
     };
     
-    const applyPhoneUpdates = (updates: PatchOperation[]) => {
+    const applyPhoneUpdates = useCallback((updates: PatchOperation[]) => {
         if (!updates || updates.length === 0) return;
 
         setCharacterState(prev => {
@@ -400,16 +413,28 @@ const App: React.FC = () => {
                 try {
                     const pathParts = update.path.split('.');
                     let current = apps;
+                    // Special handling for array indices in paths like "messages.conversations.0.messages"
                     for (let i = 0; i < pathParts.length - 1; i++) {
-                        current = current[pathParts[i]];
+                        const part = pathParts[i];
+                        if (/^\d+$/.test(part) && Array.isArray(current)) {
+                             current = current[parseInt(part, 10)];
+                        } else {
+                            current = current[part];
+                        }
                     }
+
                     const finalKey = pathParts[pathParts.length - 1];
-                    const target = current[finalKey];
+                    let target = current ? current[finalKey] : undefined;
 
                     switch (update.op) {
                         case 'add':
-                            if (Array.isArray(target) && update.value) {
+                             if (Array.isArray(target) && update.value) {
                                 target.unshift(update.value);
+                            } else if (Array.isArray(current) && /^\d+$/.test(finalKey)) { // Handle adding to nested array by index
+                                const index = parseInt(finalKey, 10);
+                                if (current[index] && Array.isArray(current[index].messages)) {
+                                     current[index].messages.push(update.value);
+                                }
                             }
                             break;
                         case 'update':
@@ -418,7 +443,7 @@ const App: React.FC = () => {
                                 if (itemIndex > -1) {
                                     target[itemIndex] = { ...target[itemIndex], ...update.value };
                                 }
-                            } else if (update.value !== undefined) {
+                            } else if (update.value !== undefined && current) {
                                 current[finalKey] = update.value;
                             }
                             break;
@@ -436,7 +461,34 @@ const App: React.FC = () => {
             }
             return newState;
         });
-    };
+    }, []);
+
+    useEffect(() => {
+        const performBackgroundUpdate = async () => {
+            if (!ai) return;
+            console.log("Đang thực hiện kiểm tra cập nhật nền cho điện thoại.");
+            try {
+                const prompt = generateBackgroundUpdatePrompt(messagesForUpdate.current, characterStateForUpdate.current);
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents: { parts: [{ text: prompt }] },
+                    config: { responseMimeType: "application/json" },
+                });
+                
+                const updateOperations = parsePhoneUpdateResponse(response.text);
+                if (updateOperations && updateOperations.length > 0) {
+                    console.log("Đang áp dụng các cập nhật nền:", updateOperations);
+                    applyPhoneUpdates(updateOperations);
+                }
+            } catch (error) {
+                console.error("Lỗi trong quá trình cập nhật nền cho điện thoại:", error);
+            }
+        };
+        
+        const intervalId = setInterval(performBackgroundUpdate, 90000); // 1.5 phút
+        
+        return () => clearInterval(intervalId);
+    }, [ai, applyPhoneUpdates]);
 
     const handleOpenPhone = async () => {
         setIsPhoneVisible(true);

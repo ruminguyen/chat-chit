@@ -1,7 +1,7 @@
 
 
 import { CharacterState, ParsedResponse, UserProfile, Message, PatchOperation } from '../types';
-import { getSystemInstruction, phoneUpdateSystemInstruction } from '../constants';
+import { getSystemInstruction, phoneUpdateSystemInstruction, backgroundPhoneUpdateSystemInstruction } from '../constants';
 
 /**
  * Generates the full system instruction prompt for the Gemini API for chatting.
@@ -22,7 +22,7 @@ export const generateGeminiPrompt = (characterState: CharacterState, userProfile
 };
 
 /**
- * Generates the prompt for the Gemini API to update the phone's state.
+ * Generates the prompt for the Gemini API to update the phone's state based on user interaction.
  */
 export const generatePhoneUpdatePrompt = (chatHistory: Message[], characterState: CharacterState): string => {
     const historyText = chatHistory
@@ -42,6 +42,29 @@ ${historyText}
 Bây giờ, hãy trả về mảng JSON chứa các hành động cập nhật. Nếu không có gì thay đổi, hãy trả về [].
 `;
 };
+
+/**
+ * Generates the prompt for the Gemini API to perform autonomous background updates on the phone.
+ */
+export const generateBackgroundUpdatePrompt = (chatHistory: Message[], characterState: CharacterState): string => {
+    const historyText = chatHistory
+        .slice(-5) // Only need the last few messages for general context
+        .map(m => `${m.sender === 'user' ? 'User' : 'Character'}: ${m.text}`).join('\n');
+    return `
+${backgroundPhoneUpdateSystemInstruction}
+
+---
+DỮ LIỆU HIỆN TẠI (để bạn có thể thêm vào hoặc sửa đổi):
+${JSON.stringify(characterState.apps)}
+---
+BỐI CẢNH TRÒ CHUYỆN GẦN ĐÂY:
+${historyText}
+---
+
+Bây giờ, hãy trả về mảng JSON chứa các hành động cập nhật nền. Nếu không có gì thay đổi, hãy trả về [].
+`;
+};
+
 
 /**
  * Generates a prompt for Gemini to create new Instagram posts.
@@ -85,8 +108,17 @@ Ví dụ đầu ra:
  */
 export const parseGeminiResponse = (response: string): ParsedResponse => {
     try {
-        const cleanedResponse = response.replace(/^```json\n?/, '').replace(/\n?```$/, '');
-        const parsed = JSON.parse(cleanedResponse);
+        // FIX: Make JSON parsing more robust by finding the first '{' and last '}'
+        // This handles cases where the API returns extra text or malformed JSON wrappers.
+        const firstBrace = response.indexOf('{');
+        const lastBrace = response.lastIndexOf('}');
+        
+        if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+             throw new Error("Không tìm thấy đối tượng JSON hợp lệ trong phản hồi.");
+        }
+
+        const jsonString = response.substring(firstBrace, lastBrace + 1);
+        const parsed = JSON.parse(jsonString);
 
         if (typeof parsed.response !== 'string') {
             throw new Error("Phản hồi JSON thiếu trường 'response' bắt buộc.");
@@ -102,7 +134,8 @@ export const parseGeminiResponse = (response: string): ParsedResponse => {
     } catch (error) {
         console.error("Lỗi khi phân tích phản hồi JSON từ Gemini (chat):", error);
         console.error("Phản hồi gốc:", response);
-        return { response };
+        // Fallback: If JSON fails, return the raw string as the response to avoid crashing.
+        return { response: response };
     }
 };
 
@@ -112,11 +145,25 @@ export const parseGeminiResponse = (response: string): ParsedResponse => {
  */
 export const parsePhoneUpdateResponse = (response: string): PatchOperation[] | null => {
     try {
-        const cleanedResponse = response.replace(/^```json\n?/, '').replace(/\n?```$/, '');
-        if (!cleanedResponse.trim() || !cleanedResponse.trim().startsWith('[')) {
+        if (!response) {
             return [];
         }
-        const parsed = JSON.parse(cleanedResponse);
+        
+        // FIX: Make JSON array parsing more robust by finding the first '[' and last ']'
+        const firstBracket = response.indexOf('[');
+        const lastBracket = response.lastIndexOf(']');
+        
+        if (firstBracket === -1 || lastBracket === -1 || lastBracket < firstBracket) {
+            // No valid array found, return empty.
+            return [];
+        }
+        
+        const jsonString = response.substring(firstBracket, lastBracket + 1);
+        if (!jsonString.trim()) {
+            return [];
+        }
+
+        const parsed = JSON.parse(jsonString);
 
         if (Array.isArray(parsed)) {
             for (const op of parsed) {
@@ -142,11 +189,24 @@ export const parsePhoneUpdateResponse = (response: string): PatchOperation[] | n
  */
 export const parseInstagramRefreshResponse = (response: string): { image: string, caption: string, song?: string }[] => {
     try {
-        const cleanedResponse = response.replace(/^```json\n?/, '').replace(/\n?```$/, '');
-        if (!cleanedResponse.trim()) {
+        if (!response) {
             return [];
         }
-        const parsed = JSON.parse(cleanedResponse);
+
+        // FIX: Make JSON array parsing more robust.
+        const firstBracket = response.indexOf('[');
+        const lastBracket = response.lastIndexOf(']');
+        
+        if (firstBracket === -1 || lastBracket === -1 || lastBracket < firstBracket) {
+            return [];
+        }
+        
+        const jsonString = response.substring(firstBracket, lastBracket + 1);
+        if (!jsonString.trim()) {
+            return [];
+        }
+
+        const parsed = JSON.parse(jsonString);
         if (Array.isArray(parsed)) {
             // Basic validation to ensure the items have the required properties
             return parsed.filter(item => typeof item.image === 'string' && typeof item.caption === 'string');
@@ -192,8 +252,25 @@ Bây giờ, hãy trả về mảng JSON chứa 3 gợi ý.
  */
 export const parseSuggestionResponse = (response: string): string[] => {
     try {
-        const cleanedResponse = response.replace(/^```json\n?/, '').replace(/\n?```$/, '');
-        const parsed = JSON.parse(cleanedResponse);
+         if (!response) {
+            return [];
+        }
+        
+        // FIX: Make JSON array parsing more robust.
+        const firstBracket = response.indexOf('[');
+        const lastBracket = response.lastIndexOf(']');
+        
+        if (firstBracket === -1 || lastBracket === -1 || lastBracket < firstBracket) {
+            // Fallback to text parsing if no array found
+            throw new Error("No JSON array found");
+        }
+        
+        const jsonString = response.substring(firstBracket, lastBracket + 1);
+        if (!jsonString.trim()) {
+            return [];
+        }
+
+        const parsed = JSON.parse(jsonString);
 
         if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
             return parsed;

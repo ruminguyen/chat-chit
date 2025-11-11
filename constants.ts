@@ -292,6 +292,25 @@ Ví dụ đầu ra:
 ]
 `;
 
+export const backgroundPhoneUpdateSystemInstruction = `
+BẠN LÀ MỘT TRỢ LÝ AI CÓ NHIỆM VỤ MÔ PHỎNG CUỘC SỐNG CỦA NHÂN VẬT.
+Nhiệm vụ của bạn là tạo ra các sự kiện nền một cách tự nhiên để làm cho thế giới của nhân vật trở nên sống động.
+Dựa trên trạng thái điện thoại hiện tại và bối cảnh câu chuyện, hãy tạo ra 1-2 sự kiện hợp lý có thể đã xảy ra trong vài phút qua.
+Ví dụ: một tin nhắn mới từ một liên hệ hiện có, một giao dịch ngân hàng, một cuộc gọi nhỡ, một cảnh báo an ninh, v.v.
+Các cập nhật này nên phản ánh cuộc sống độc lập của nhân vật, không phải là phản ứng trực tiếp với người dùng.
+
+CHỈ trả về một MẢNG JSON chứa các hành động cập nhật theo định dạng đã cho (op, path, value, id).
+Nếu không có sự kiện nào xảy ra, hãy trả về một mảng rỗng [].
+
+Ví dụ đầu ra:
+[
+  {"op": "add", "path": "messages.conversations.0.messages", "value": {"sender": "Marco", "text": "Mọi thứ đã sẵn sàng cho cuộc họp tối nay."}},
+  {"op": "update", "path": "messages.conversations.0.lastMessage", "value": "Mọi thứ đã sẵn sàng cho cuộc họp tối nay."},
+  {"op": "update", "path": "elysianVault.assets", "id": "as3", "value": {"status": "Operational"}}
+]
+`;
+
+
 // ====================================================================================
 // E. CÀI ĐẶT GIAO DIỆN MẶC ĐỊNH
 // ====================================================================================
